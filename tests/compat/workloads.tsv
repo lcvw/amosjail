@@ -1,0 +1,15 @@
+# Workloads that must run unmodified in a jail (PLAN tests/compat).
+# One per line: NAME<TAB>COMMAND, run with /bin/sh -c in /work; prints ok.
+sh	echo ok
+ls	ls -la /work /usr/bin >/dev/null && echo ok
+git-init	cd /tmp && rm -rf g && mkdir g && cd g && git init -q && echo ok
+git-commit	cd /tmp && rm -rf g && git init -q g && cd g && echo x > f && git add f && git -c user.name=t -c user.email=t@t commit -qm m && git log --oneline | grep -q m && echo ok
+git-status	git -C /work status --short >/dev/null && echo ok
+python3	python3 -c 'import json, ssl, sqlite3; print("ok")'
+curl	curl -s -o /dev/null -w '%{http_code}\n' https://example.com/ | grep -q 200 && echo ok
+perl	perl -e 'print "ok\n"'
+less	echo ok | less -FX
+vim	vim -es -c 'put =\"ok\"' -c 'w! /tmp/v.txt' -c q; grep -x ok /tmp/v.txt
+tar	cd /tmp && tar -czf t.tgz -C /work . && tar -tzf t.tgz >/dev/null && echo ok
+make	printf 'all:\n\t@echo ok\n' > /tmp/Makefile && make -s -f /tmp/Makefile
+cc	printf 'int main(){return 0;}' > /tmp/a.c && cc -o /work/a.out /tmp/a.c && /work/a.out && rm /work/a.out && echo ok

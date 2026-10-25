@@ -96,6 +96,11 @@ class CompileTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             compile.render(spec("[roles.r]"), ROOT, tty="../x")
 
+    def test_stdio_paths(self):
+        text = compile.render(spec("[roles.r]"), ROOT, stdio_paths=["/private/tmp/out.log"])
+        self.assertIn('(allow file-read-metadata (literal "/private/tmp/out.log"))', text)
+        self.assertNotIn("file-read-metadata (literal", compile.render(spec("[roles.r]"), ROOT))
+
     def test_proc_visibility_and_debug(self):
         text = compile.render(spec('[roles.r]\nproc_visibility = "names"\ndebug = true'), ROOT)
         self.assertGreater(text.index("process-info-listpids"), text.index("(deny process-info*)"))

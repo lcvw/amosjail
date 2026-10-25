@@ -141,8 +141,10 @@ def _anchor(target: str, pattern: str) -> list[str]:
     return out
 
 
-def render(spec: Spec, root: str, tty: str | None = None, report: bool = False) -> str:
-    """tty: the device name of the jail's terminal ("ttys005"), if any."""
+def render(spec: Spec, root: str, tty: str | None = None, report: bool = False,
+           stdio_paths: list[str] = ()) -> str:
+    """tty: the device name of the jail's terminal ("ttys005"), if any.
+    stdio_paths: host paths of the files passed in as stdio, if any."""
     pr = Profile(root)
     out: list[str] = ["(version 1)"]
     if report:
@@ -176,8 +178,13 @@ def render(spec: Spec, root: str, tty: str | None = None, report: bool = False) 
         out.append("(allow process-exec* " + " ".join(pr.pattern(e) for e in spec.exec) + ")")
 
     out.append("\n; devices: /dev/fd only reopens the process's own fds")
-    out.append(f"(allow file-read* file-write-data {pr.sub('/dev/fd')} "
+    # /dev/tty opens only with a controlling terminal (the pty), else ENXIO.
+    out.append(f"(allow file-read* file-write-data {pr.sub('/dev/fd')} {pr.lit('/dev/tty')} "
                + " ".join(pr.lit(f"/dev/std{x}") for x in ("in", "out", "err")) + ")")
+    # fstat of the stdio passed in from outside (clang gives up without it).
+    # Only metadata, and only of files the jail already holds open.
+    if stdio_paths:
+        out.append("(allow file-read-metadata " + " ".join(f"(literal {q(p)})" for p in stdio_paths) + ")")
     if spec.devices:
         out.append("(allow file-read* file-write-data " + " ".join(pr.lit(d) for d in spec.devices) + ")")
     if tty:

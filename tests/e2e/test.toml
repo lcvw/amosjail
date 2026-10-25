@@ -20,8 +20,17 @@ links = { "/etc" = "private/etc", "/tmp" = "private/tmp", "/var" = "private/var"
 exec = ["/usr/bin/**", "/bin/**", "/sbin/**", "/usr/sbin/**", "/usr/libexec/**"]
 devices = ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"]
 sysctl_read = true
-mach = ["com.apple.system.logger", "com.apple.system.opendirectoryd.libinfo"]
+mach = ["com.apple.system.logger", "com.apple.logd", "com.apple.system.notification_center",
+        "com.apple.system.opendirectoryd.libinfo", "com.apple.system.opendirectoryd.membership"]
+# libc's notify(3) reads its state from shared memory
+sbpl = '(allow ipc-posix-shm-read-data (ipc-posix-name "apple.shm.notification_center"))'
 env = { set = { HOME = "/home", TMPDIR = "/private/tmp", PATH = "/usr/bin:/bin:/usr/sbin:/sbin" }, pass = ["TERM"] }
+
+# Xcode Command Line Tools: git, make, clang, python3 (the /usr/bin
+# shims exec into here). Seen through the /Library bind.
+[fragments.devtools]
+exec = ["/Library/Developer/CommandLineTools/**"]
+env = { set = { DEVELOPER_DIR = "/Library/Developer/CommandLineTools" } }
 
 [fragments.project]
 binds = [{ source = "${PROJECT}", target = "/work", mode = "rw" }]
@@ -29,14 +38,22 @@ exec = ["/work/**"]
 cwd = "/work"
 
 [roles.test]
-fragments = ["base", "project"]
+fragments = ["base", "devtools", "project"]
 network = "open"
 dns = true
 params = { PROJECT = "${CWD}" }
 cli = { binds = "ro", params = ["PROJECT"] }
 
 [roles.offline]
-fragments = ["base", "project"]
+fragments = ["base", "devtools", "project"]
 network = "none"
+params = { PROJECT = "${CWD}" }
+cli = { params = ["PROJECT"] }
+
+[roles.proxied]
+fragments = ["base", "devtools", "project"]
+network = "proxy"
+proxy = { label = "amosjail-e2e" }
+dns = true
 params = { PROJECT = "${CWD}" }
 cli = { params = ["PROJECT"] }

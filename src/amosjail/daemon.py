@@ -25,6 +25,7 @@ import fcntl
 import logging
 import os
 import pwd
+import re
 import signal
 import socket
 import subprocess
@@ -40,6 +41,16 @@ logger = logging.getLogger("amosjaild")
 
 FORWARDED_SIGNALS = {signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT,
                      signal.SIGCONT, signal.SIGUSR1, signal.SIGUSR2, signal.SIGWINCH}
+
+
+def fd_path(fd: int) -> str | None:
+    """The path of the file an fd refers to; None for pipes and sockets."""
+    try:
+        buf = fcntl.fcntl(fd, fcntl.F_GETPATH, bytes(1024))
+    except OSError:
+        return None
+    p = buf.split(b"\0", 1)[0].decode(errors="surrogateescape")
+    return p if p.startswith("/") else None
 
 
 class Conn:
@@ -324,7 +335,8 @@ class Daemon:
         if os.isatty(stdio[0]):
             name = os.path.basename(os.ttyname(stdio[0]))
             tty = name if name.startswith("ttys") else None
-        profile = compile.render(spec, st.root, tty=tty, report=j.report)
+        profile = compile.render(spec, st.root, tty=tty, report=j.report,
+                                 stdio_paths=sorted({p for p in map(fd_path, stdio) if p}))
 
         args = [self.settings.enter, "--root", st.root, "--uid", str(st.uid), "--gid", str(st.gid),
                 # setgroups takes at most 16 (NGROUPS); the kernel resolves
@@ -407,7 +419,10 @@ class Daemon:
             msg = line[i + 9:]
             pid = msg.split("(", 1)[1].split(")", 1)[0] if "(" in msg else ""
             if pid in pids or j.st.root in msg:
-                out.append(msg.replace(j.st.root, ""))
+                # Jail paths as the jail sees them; anything else is a host path.
+                msg = re.sub(r"(?<=[ :])(/[^ ]*)", lambda m: m.group(1).replace(j.st.root, "", 1)
+                             if m.group(1).startswith(j.st.root) else "host:" + m.group(1), msg)
+                out.append(msg)
         return out
 
     def teardown(self, j: Jail, why: str) -> None:
