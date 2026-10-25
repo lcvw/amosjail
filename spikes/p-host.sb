@@ -1,0 +1,5 @@
+(version 1)
+(allow default)
+(deny file-read* (subpath "/private/tmp/mj/root/work"))
+(deny file-write* (subpath "/private/tmp/mj/root/work"))
+(deny process-exec (literal "/private/tmp/mj/root/work/tool"))

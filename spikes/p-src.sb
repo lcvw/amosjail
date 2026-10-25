@@ -1,0 +1,5 @@
+(version 1)
+(allow default)
+(deny file-read* (subpath "/Users/liamwisehart/mosjail-spike/work"))
+(deny file-write* (subpath "/Users/liamwisehart/mosjail-spike/work"))
+(deny process-exec (literal "/Users/liamwisehart/mosjail-spike/work/tool"))

@@ -1,0 +1,5 @@
+(version 1)
+(allow default)
+(deny file-read* (subpath "/work"))
+(deny file-write* (subpath "/work"))
+(deny process-exec (literal "/work/tool"))
