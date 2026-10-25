@@ -1,4 +1,4 @@
-# mosjail — Implementation Plan
+# amosjail — Implementation Plan
 
 **Status:** design; core spikes done on macOS 27.0.1 (`docs/spike-results.md`).
 A hand-built jail (mosbind chroot + deny-default profile, applied by
@@ -21,7 +21,7 @@ mosbind bind mounts and confined by a Seatbelt profile, where the tree
 
 Two goals shape everything below:
 
-- **Seamless.** `mosjail run --role agent -- claude` works unprivileged, as
+- **Seamless.** `amosjail run --role agent -- claude` works unprivileged, as
   the user's own uid, with their terminal, cwd and exit status. There's no
   sudo and no uid switching.
 - **Maximally configurable.** Roles are composed from fragments, can be
@@ -30,7 +30,7 @@ Two goals shape everything below:
 
 A caller **enrolls** with a **role** id from the TOML config, over a unix
 socket. There is one config file, in a fixed location,
-`/etc/mosjail/mosjail.toml` (D-13). The daemon identifies the caller by the kernel's view of the
+`/etc/amosjail/amosjail.toml` (D-13). The daemon identifies the caller by the kernel's view of the
 socket peer (`LOCAL_PEERTOKEN`), never by anything in the request.
 
 ### Non-goals
@@ -41,7 +41,7 @@ rlimits, protecting the jail *from* the user's other processes, a GUI.
 ## 2. Threat model
 
 The jailed tree runs arbitrary code as **the invoking user's uid**. It is
-hostile and knows how mosjail works. Because it shares a uid with the user's
+hostile and knows how amosjail works. Because it shares a uid with the user's
 other processes, the kernel's cross-uid checks no longer help: **Seatbelt is
 the whole boundary** for E2–E4 and E6, and those rows must be proven by
 tests, not assumed.
@@ -56,7 +56,7 @@ tests, not assumed.
 | E6 | delegate to launchd/XPC (`launchctl submit`, `open`, `osascript`, background `NSURLSession`) | `mach-lookup` allowlist + deny job creation (S-4) |
 | E7 | reach a local service (ssh-agent, docker, amosproxy's sockets, a local proxy) | `network-outbound` denies loopback and unix sockets except an allowlist |
 | E8 | send traffic amosproxy doesn't see (UDP, loopback, provider restart) | Seatbelt network rules per role; amosproxy for the rest |
-| E9 | tamper with mosjail/amosproxy (config, sockets, daemon) | outside the view; file, signal and unix-socket rules |
+| E9 | tamper with amosjail/amosproxy (config, sockets, daemon) | outside the view; file, signal and unix-socket rules |
 | E10 | use an fd opened outside the jail | only stdin/stdout/stderr are passed in; everything else closed (D-6) |
 | E11 | inject keystrokes into the user's terminal (`TIOCSTI`) | `TIOCSTI` denied by ioctl command in every profile (D-6, measured) |
 | E12 | persist after the jail ends (launchd jobs, LaunchAgents, cron) | no writes outside rw binds; no job creation; teardown kills the session |
@@ -118,19 +118,19 @@ Measured on macOS 27.0.1 (`docs/spike-results.md`):
 
 ```
  user shell (uid 501)
-   mosjail run --role agent [--bind …] [--param …] -- claude …     unprivileged client
+   amosjail run --role agent [--bind …] [--param …] -- claude …     unprivileged client
      │ 1. mounts the role's binds itself with mosbind (as the user; D-4)
-     │ 2. /var/run/mosjaild.sock {"op":"spawn","role":"agent",argv,cwd,env,…}
+     │ 2. /var/run/amosjaild.sock {"op":"spawn","role":"agent",argv,cwd,env,…}
      │    + SCM_RIGHTS: its stdin, stdout, stderr
      │ 3. forwards signals, exits with the jail's status
      ▼
- mosjaild (root, launchd)
-   ├─ re-reads /etc/mosjail/mosjail.toml
+ amosjaild (root, launchd)
+   ├─ re-reads /etc/amosjail/amosjail.toml
    ├─ LOCAL_PEERTOKEN → caller uid, gid, asid, pid
    ├─ checks the caller may use the role; resolves fragments + params → SBPL
    ├─ verifies the caller's mosbind mounts (getmntinfo: type, owner, source, target)
    ├─ mounts devfs at <root>/dev; hard-links mDNSResponder if dns = true
-   └─ spawns mosjail-enter (root, fresh process) with the compiled profile
+   └─ spawns amosjail-enter (root, fresh process) with the compiled profile
           1. setaudit_addr(AU_ASSIGN_ASID)                   fresh asid
           2. amosproxy tag {label}                           if role.network = "proxy"
           3. sandbox_compile_string(profile, JAIL=<root>)     before chroot (D-5)
@@ -143,7 +143,7 @@ Measured on macOS 27.0.1 (`docs/spike-results.md`):
 ```
 
 `enroll` is the same thing for a caller that is already root and wants to
-jail itself (for other tools that embed mosjail). mosjaild returns the
+jail itself (for other tools that embed amosjail). amosjaild returns the
 compiled profile and the jail root, records the caller's asid against the
 role, and the caller runs steps 3–8 itself.
 
@@ -154,7 +154,7 @@ role, and the caller runs steps 3–8 itself.
   project at `/work`, a normal `/usr`). The profile stops whatever gets past
   the chroot (fds, Mach services, sockets). It also covers what a chroot
   never could: signals, process info, task ports and network.
-- **D-2 mosjail's profile is the only Seatbelt layer.** Seatbelt can't nest
+- **D-2 amosjail's profile is the only Seatbelt layer.** Seatbelt can't nest
   (§3.7), so the harness inside the jail must run with its own sandbox off:
   Claude Code's sandbox setting disabled, Codex with
   `--sandbox danger-full-access`. Tools that sandbox themselves need their
@@ -164,7 +164,7 @@ role, and the caller runs steps 3–8 itself.
   work; they just aren't the security boundary any more.
 - **D-3 The daemon spawns; the client relays.** Creating an audit session
   and chrooting need root. Doing them in the daemon instead of sudo or a
-  setuid binary keeps `mosjail run` unprivileged and keeps the privileged
+  setuid binary keeps `amosjail run` unprivileged and keeps the privileged
   code in one place. The jail runs as the **caller's uid** (from the peer
   token), so files it writes in rw binds are the user's, mosbind admits it,
   and nothing needs accounts.
@@ -177,7 +177,7 @@ role, and the caller runs steps 3–8 itself.
   - the source and read-only flag match the role.
 
   Anything unexpected under the jail root aborts the spawn. Jail roots live
-  at `/var/mosjail/<uid>/<id>/root`. The directory is root-owned `0755`; the
+  at `/var/amosjail/<uid>/<id>/root`. The directory is root-owned `0755`; the
   mountpoints inside it are owned by the user. Three constraints measured on
   macOS 27:
   - **FSKit won't mount the same source twice** ("Resource busy"), so two
@@ -198,7 +198,7 @@ role, and the caller runs steps 3–8 itself.
 - **D-5 Compile before chroot, apply just before exec.** The profile is
   compiled while the host filesystem is still visible, so it imports nothing
   from inside the jail. It is applied as the last step before `execve`, so
-  `mosjail-enter`'s own setup (chroot, setuid) isn't constrained by it.
+  `amosjail-enter`'s own setup (chroot, setuid) isn't constrained by it.
   Measured with `spikes/enter.c`, linked with `-lsandbox`.
   The compiled profile is self-contained. It doesn't import
   `/System/Library/Sandbox/Profiles/*.sb`: Apple's profiles change across
@@ -238,11 +238,11 @@ role, and the caller runs steps 3–8 itself.
   the default covers.
 - **D-8 Paths are written in jail terms and compiled to host paths.**
   Inside a chroot, Seatbelt matches the host spelling of the mount path
-  (measured, S-1), so `/work/x` compiles to `/private/var/mosjail/501/j7/root/work/x`.
+  (measured, S-1), so `/work/x` compiles to `/private/var/amosjail/501/j7/root/work/x`.
   The jail root is passed as a profile parameter (`(param "JAIL")`), so the
   compiled text doesn't depend on the jail id. The compiler normalises
   `/var` → `/private/var`, `/tmp` → `/private/tmp`, firmlinks, NFD and case,
-  once, at compile time. `mosjail profile --role R` prints the result for
+  once, at compile time. `amosjail profile --role R` prints the result for
   review.
 - **D-9 rw binds carry a default deny list** against E13: `.git/hooks/**`,
   `.git/config`, `.envrc`, `.direnv/**`, `.vscode/**`, `.idea/**`,
@@ -251,7 +251,7 @@ role, and the caller runs steps 3–8 itself.
 - **D-10 Network policy per role** (E7, E8):
   - `none` — no network at all;
   - `proxy` — outbound TCP to non-loopback only, an amosproxy tag is
-    required before exec, and `mosjail run` fails if amosproxy isn't
+    required before exec, and `amosjail run` fails if amosproxy isn't
     running;
   - `open` — anything but loopback and unix sockets.
 
@@ -260,14 +260,14 @@ role, and the caller runs steps 3–8 itself.
   `localhost` also covers `0.0.0.0`, `::1` and the machine's own addresses
   (measured). UDP is always denied: `dns = true` allows only the
   `mDNSResponder` socket, which is all `getaddrinfo` needs (measured).
-- **D-11 Report mode.** `mosjail run --report` compiles the same profile with
+- **D-11 Report mode.** `amosjail run --report` compiles the same profile with
   every deny turned into `(allow (with report) …)` (S-6). It collects the
   Sandbox violations from the unified log for the jail's pid set and prints
   a role fragment that would have allowed them, for the user to review and
   paste. This is the main configuration tool; nothing is applied
   automatically.
 - **D-12 Jail lifetime = audit session membership.** When the first process
-  exits, or the client disconnects, or `mosjail kill` runs, the daemon:
+  exits, or the client disconnects, or `amosjail kill` runs, the daemon:
   1. repeatedly `SIGSTOP`s and then `SIGKILL`s every process whose audit
      token has the jail's asid, until none is left (enumerated as root via
      task name ports);
@@ -275,10 +275,10 @@ role, and the caller runs steps 3–8 itself.
   3. tells the client to unmount;
   4. removes the jail root.
 
-  Detached jails (`--detach`) are kept until `mosjail kill`. A startup reaper
-  cleans up after a daemon crash from `/var/db/mosjail/`.
-- **D-13 One config file, in a fixed place: `/etc/mosjail/mosjail.toml`.**
-  It may be owned by root or by a user; mosjail doesn't check. It has no
+  Detached jails (`--detach`) are kept until `amosjail kill`. A startup reaper
+  cleans up after a daemon crash from `/var/db/amosjail/`.
+- **D-13 One config file, in a fixed place: `/etc/amosjail/amosjail.toml`.**
+  It may be owned by root or by a user; amosjail doesn't check. It has no
   layering and no per-user roles for now. `MOSJAIL_CONFIG` overrides the
   path, for tests only. The daemon re-reads the file on every `spawn`, so
   edits take effect for the next jail without a restart. Because the file
@@ -286,16 +286,16 @@ role, and the caller runs steps 3–8 itself.
   only ever creates, mounts and removes inside `jail_dir`, and refuses a
   `jail_dir` that isn't root-owned. A role can set `required = true` on a
   fragment so that no `--bind` or `--param` can drop it.
-- **D-14 Languages.** mosjaild and the client in Python, stdlib only
+- **D-14 Languages.** amosjaild and the client in Python, stdlib only
   (`tomllib`), reusing amosproxy's `session.py`, `darwin.py` and framing.
-  `mosjail-enter` is small C, so the code between `chroot` and `execve` has
+  `amosjail-enter` is small C, so the code between `chroot` and `execve` has
   no interpreter, no imports and no dyld surprises inside the jail.
 
 ## 5. Config
 
 ```toml
 [daemon]
-jail_dir = "/var/mosjail"
+jail_dir = "/var/amosjail"
 amosproxy_socket = "/var/run/amosproxy.sock"
 
 # Fragments are reusable building blocks. ${HOME}, ${USER}, ${CWD}, ${PROJECT}
@@ -342,27 +342,27 @@ unix_sockets = []
 proc_visibility = "jail"               # jail | all
 exec = ["/usr/bin/**", "/bin/**", "/work/.venv/bin/**"]
 allowed_users = ["liam"]
-cli = { binds = "ro", params = ["PROJECT"] }   # what `mosjail run` may add
+cli = { binds = "ro", params = ["PROJECT"] }   # what `amosjail run` may add
 rlimits = { nproc = 1024, nofile = 8192 }
 ```
 
 ### CLI
 
 ```
-mosjail run --role R [--bind SRC:DST[:ro|rw]] [--param K=V] [--report] [--detach] -- CMD…
-mosjail profile --role R [--param …]          print the compiled SBPL
-mosjail status | kill <jail>
-mosjail roles                                  list roles available to the caller
+amosjail run --role R [--bind SRC:DST[:ro|rw]] [--param K=V] [--report] [--detach] -- CMD…
+amosjail profile --role R [--param …]          print the compiled SBPL
+amosjail status | kill <jail>
+amosjail roles                                  list roles available to the caller
 ```
 
 ### Wire protocol
 
-Line-delimited JSON on `/var/run/mosjaild.sock`, like amosproxy's control
+Line-delimited JSON on `/var/run/amosjaild.sock`, like amosproxy's control
 socket.
 
 ```
 {"op":"spawn","role":"agent","argv":[…],"cwd":"…","env":{…},"params":{…},"binds":[…]}
-  → {"ok":true,"jail":"j7","root":"/var/mosjail/501/j7/root","mounts":[…]}   client mounts, then:
+  → {"ok":true,"jail":"j7","root":"/var/amosjail/501/j7/root","mounts":[…]}   client mounts, then:
 {"op":"go","jail":"j7"} + stdio fds via SCM_RIGHTS → a stream of {"exit":…} / signal frames
 {"op":"enroll","role":"agent"}   root caller only → {"ok":true,"profile":"…","root":"…"}
 {"op":"status"} / {"op":"kill","jail":"j7"} / {"op":"compile","role":"agent","params":{…}}
@@ -371,7 +371,7 @@ socket.
 ## 6. Layout
 
 ```
-src/mosjail/
+src/amosjail/
   cli.py          run / profile / status / kill / roles / daemon
   client.py       mounting, stdio passing, signal forwarding
   config.py       tomllib load and validation (D-13)
@@ -381,7 +381,7 @@ src/mosjail/
   jails.py        jail roots, mount verification, teardown, reaper (D-4, D-12)
   amosproxy.py    client for amosproxy's control socket
 enter/
-  mosjail-enter.c the pre-exec sequence (§4); no dependencies beyond libSystem
+  amosjail-enter.c the pre-exec sequence (§4); no dependencies beyond libSystem
 profiles/
   fragments/      shipped fragments: base, homebrew, python, node, git, claude-code, codex
 tests/
@@ -402,12 +402,12 @@ S-5 is really T-06.
 
 - **T-01** Config loader with layering and fragments; compiler; golden-file
   tests of compiled SBPL.
-- **T-02** `mosjail-enter` (C): the §4 sequence, which refuses to continue
+- **T-02** `amosjail-enter` (C): the §4 sequence, which refuses to continue
   if any step fails.
 - **T-03** Daemon: `spawn`/`go`, mount verification, devfs, mDNSResponder
   link, teardown, reaper.
 - **T-04** Client: mounting, stdio passing, signals, exit status.
-- **T-05** `mosjail profile`, `status`, `kill`, `roles`.
+- **T-05** `amosjail profile`, `status`, `kill`, `roles`.
 - **T-06** Shipped `base` fragment, derived from S-5 and S-9.
 - **T-08** *(mosbind)* Make each mount's FSKit resource unique, so one source
   can be bound by several jails at once without the path-spelling trick
@@ -430,11 +430,11 @@ leaves no process in the asid and no mosbind mount behind.
 
 - **T-30** Report mode and the fragment suggester (D-11).
 - **T-31** `required` fragments and CLI limits (D-13, `cli = {…}`).
-- **T-32** `enroll` for root callers embedding mosjail.
+- **T-32** `enroll` for root callers embedding amosjail.
 
 ### M4 — packaging
 
-`mosjail install`: launchd plist for mosjaild, `/etc/mosjail` skeleton,
+`amosjail install`: launchd plist for amosjaild, `/etc/amosjail` skeleton,
 shipped fragments. No system extension, no entitlement, no approval prompts.
 
 ## 8. Known gaps
@@ -504,14 +504,14 @@ Results are in `docs/spike-results.md`; sources and profiles in `spikes/`.
 ## 10. Open questions
 
 - **Q-1** *(answered: one config file in a fixed place, any owner; D-13)*
-- **Q-2** Should `mosjail run` without `--role` pick a default role, or
+- **Q-2** Should `amosjail run` without `--role` pick a default role, or
   infer one from the command (`claude` → `agent`)? That's more seamless but
   more magic.
 - **Q-3** DNS: allow `mDNSResponder` and accept the gap, or route jail DNS
   through mitmproxy's DNS mode?
-- **Q-4** Should the daemon spawn (D-3), or should mosjail offer a
-  setuid-root `mosjail-enter` as well, for environments without a daemon?
-- **Q-5** One daemon or two? mosjaild and amosproxyd share the tag and the
+- **Q-4** Should the daemon spawn (D-3), or should amosjail offer a
+  setuid-root `amosjail-enter` as well, for environments without a daemon?
+- **Q-5** One daemon or two? amosjaild and amosproxyd share the tag and the
   framing. With `network = "proxy"` as the common case, merging removes a
   failure mode.
 - **Q-6** Default `proc_visibility`: `jail` hides `ps` output a harness may
@@ -534,13 +534,13 @@ Results are in `docs/spike-results.md`; sources and profiles in `spikes/`.
 4. **Mount verification gaps (medium, medium).** D-4 trusts `getmntinfo`'s
    view of who mounted what. A user-owned mountpoint could be swapped after
    verification and before chroot. Mitigation: verify again in
-   `mosjail-enter` after chroot, by `fstatfs` on each bind target.
+   `amosjail-enter` after chroot, by `fstatfs` on each bind target.
 
 ## 12. Conventions
 
 - Test machine: macOS 27; mosbind installed and enabled; passwordless sudo
-  for e2e scripts. SIP and AMFI need no changes for mosjail itself.
-- Python ≥ 3.12 via uv; stdlib only. `mosjail-enter` builds with `cc` from
+  for e2e scripts. SIP and AMFI need no changes for amosjail itself.
+- Python ≥ 3.12 via uv; stdlib only. `amosjail-enter` builds with `cc` from
   the Command Line Tools.
 - Every gate is a script under `tests/e2e/` that exits non-zero on failure.
 - Commit messages reference ids (`T-02: …`).

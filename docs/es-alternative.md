@@ -1,4 +1,4 @@
-# mosjail — Endpoint Security alternative (not pursued)
+# amosjail — Endpoint Security alternative (not pursued)
 
 > Superseded by `../PLAN.md` (Seatbelt). Kept because it is the fallback if
 > Seatbelt nesting or a missing SBPL operation rules Seatbelt out.
@@ -19,7 +19,7 @@ mosbind bind mounts, where the tree
 - cannot ptrace, inspect, suspend or signal anything outside the jail,
 - cannot leave its amosproxy tag or get around the proxy's controls.
 
-A process **enrolls** with a **role** from `mosjaild`'s TOML config. The role
+A process **enrolls** with a **role** from `amosjaild`'s TOML config. The role
 says what is bound in, what may run and what it may reach. Enrollment is
 bound to the caller's audit session, which the kernel reports over the
 enrollment socket (`LOCAL_PEERTOKEN`) — never to anything in the request.
@@ -35,7 +35,7 @@ beyond rlimits, multi-machine policy, a GUI.
 ## 2. Threat model
 
 The jailed tree runs arbitrary code as an unprivileged, per-jail uid (D-4).
-It is assumed hostile and knows how mosjail works. It wins if it does any of:
+It is assumed hostile and knows how amosjail works. It wins if it does any of:
 
 | # | Escape | Primary control | Backstop |
 |---|---|---|---|
@@ -47,8 +47,8 @@ It is assumed hostile and knows how mosjail works. It wins if it does any of:
 | E6 | delegate work to launchd/XPC (`launchctl submit`, `open`, LaunchAgents) so it runs untagged | per-jail uid: the job runs as that uid; ES denies exec for that uid outside the jail's session (D-6) | `NOTIFY_XPC_CONNECT` audit; bootstrap domain switch (D-12) |
 | E7 | reach a local service that acts for it (ssh-agent, docker, amosproxy's sockets, a local proxy) | ES `AUTH_UIPC_CONNECT` allowlist | pf `user` rules on `lo0` for TCP/UDP loopback (D-13) |
 | E8 | send traffic amosproxy doesn't see (UDP, loopback, provider restart window) | amosproxy | pf per-uid backstop (D-13) |
-| E9 | tamper with mosjail/amosproxy (config, sockets, binaries, kill the extension) | outside the jail's view; uid | ES deny |
-| E10 | use a file descriptor opened outside the jail | `mosjail run` closes every fd ≥ 3 | `UIPC_CONNECT` limits fd-passing peers |
+| E9 | tamper with amosjail/amosproxy (config, sockets, binaries, kill the extension) | outside the jail's view; uid | ES deny |
+| E10 | use a file descriptor opened outside the jail | `amosjail run` closes every fd ≥ 3 | `UIPC_CONNECT` limits fd-passing peers |
 | E11 | inject keystrokes into the invoking terminal (`TIOCSTI`) after exit | jail gets its own pty (D-11) | — |
 | E12 | outlive teardown (stray processes, launchd jobs, files) | teardown kills by uid and boots out the uid's launchd domain (D-10) | — |
 
@@ -86,12 +86,12 @@ the ES path policy must allow them.
 ## 4. Architecture
 
 ```
- sudo mosjail run --role agent -- claude …
+ sudo amosjail run --role agent -- claude …
    │ supervisor (root, NOT jailed): owns the pty, forwards signals, reports exit
    │ fork ──► child
    │           1. setaudit_addr(AU_ASSIGN_ASID)                 fresh asid
    │           2. amosproxy tag {label}                          if role.proxy = "required"
-   │           3. mosjaild enroll {role}  ───────────────────┐
+   │           3. amosjaild enroll {role}  ───────────────────┐
    │                ◄── {jail, root, uid, gid} after ext ack  │
    │           4. chroot(root); chdir                         │ allowed once, to root only
    │           5. setgroups/setgid/setuid(jail uid)           │
@@ -104,12 +104,12 @@ the ES path policy must allow them.
                                                          yes → evaluate the compiled role
                                                        ▲ jail table, compiled roles
                                                        │ (extension channel, unix socket)
- mosjaild (root, launchd) ─────────────────────────────┘
-   ├─ config        /etc/mosjail/mosjail.toml   (root-owned, refused if not)
-   ├─ control       /var/run/mosjaild.sock      enroll / status / kill
-   ├─ ext channel   /var/run/mosjaild-ext.sock
+ amosjaild (root, launchd) ─────────────────────────────┘
+   ├─ config        /etc/amosjail/amosjail.toml   (root-owned, refused if not)
+   ├─ control       /var/run/amosjaild.sock      enroll / status / kill
+   ├─ ext channel   /var/run/amosjaild-ext.sock
    ├─ jail builder  uid allocation, jail root, mosbind mounts, teardown
-   └─ state         /var/db/mosjail/            survives daemon and extension restarts
+   └─ state         /var/db/amosjail/            survives daemon and extension restarts
 ```
 
 ### Decisions
@@ -122,7 +122,7 @@ the ES path policy must allow them.
   `mach-lookup` control (E6 needs D-6 and D-12 instead), an entitlement, and
   two approvals at install (§5 M4).
 - **D-2 The tag is the audit session, shared with amosproxy.** One asid
-  carries both the network tag (amosproxy) and the jail (mosjail). ES gives
+  carries both the network tag (amosproxy) and the jail (amosjail). ES gives
   `audit_token` on every `es_process_t`, so matching is
   `audit_token_to_asid` plus a set lookup, the same as amosproxy D-1.
 - **D-3 Enrollment is bound to the kernel's view of the caller.** `enroll`
@@ -160,8 +160,8 @@ the ES path policy must allow them.
   failed execs instead of escapes. amosproxy should match on uid the same way
   (T-41).
 - **D-7 File policy is an allowlist over host paths.** The role is written in
-  jail paths (`/work`). mosjaild compiles it against the jail root
-  (`/var/mosjail/j7/root/work`), plus the host paths the chroot workaround
+  jail paths (`/work`). amosjaild compiles it against the jail root
+  (`/var/amosjail/j7/root/work`), plus the host paths the chroot workaround
   needs (S-9), into a path trie the extension evaluates. Covered events:
   - `AUTH_OPEN` (read-only via `es_respond_flags_result` stripping `FWRITE`)
   - `CREATE`, `UNLINK`, `RENAME` and `LINK` (both ends), `CLONE`,
@@ -178,7 +178,7 @@ the ES path policy must allow them.
   `/private`) happens once, at compile time.
 - **D-8 The hot path never blocks.** The extension evaluates every AUTH
   event locally from its own copy of the policy. It never calls the daemon
-  during an event, mutes itself and mosjaild (`es_mute_process`), and on
+  during an event, mutes itself and amosjaild (`es_mute_process`), and on
   internal error answers deny for jailed processes and allow for the rest.
   Untagged events cost one asid lookup and one uid range check.
 - **D-9 The extension owns session membership.** It tracks
@@ -195,8 +195,8 @@ the ES path policy must allow them.
   4. untag the asid in amosproxy and the extension;
   5. release the uid.
 
-  `mosjail kill <jail>` (root only) forces the same path. A startup reaper
-  replays `/var/db/mosjail/` to clean up after a crashed daemon.
+  `amosjail kill <jail>` (root only) forces the same path. A startup reaper
+  replays `/var/db/amosjail/` to clean up after a crashed daemon.
 - **D-11 The jail never inherits the invoking terminal.** The supervisor
   allocates a pty when stdin is a tty and relays it. The child does `setsid`
   and makes the pty slave its controlling tty. Without a tty, stdin, stdout
@@ -206,7 +206,7 @@ the ES path policy must allow them.
   reach the jail user's own (empty) per-user services instead of the real
   user's. ES can't gate `mach-lookup`, so this, D-4 and D-6 together are the
   E6 defence. Exact mechanism: S-4.
-- **D-13 pf backstop keyed on uid.** mosjaild loads an anchor with
+- **D-13 pf backstop keyed on uid.** amosjaild loads an anchor with
   `block out quick on lo0 … user { <range> }` (loopback is invisible to the
   transparent proxy) and, when `role.proxy = "required"`, blocks non-TCP
   for those uids. This also covers amosproxy's provider-restart window
@@ -216,7 +216,7 @@ the ES path policy must allow them.
     amosproxy D-10). No extension means no jail.
   - The extension persists the jail table and reloads it before
     subscribing, with `NSEndpointSecurityEarlyBoot`.
-  - If the extension channel drops, mosjaild kills every live jail by uid
+  - If the extension channel drops, amosjaild kills every live jail by uid
     (`on_extension_loss = "kill"`, the default).
   - `role.proxy = "required"` and no amosproxy tag → enrollment refused.
 - **D-15 ES auth caching is off for jailed processes.** ES's cache key does
@@ -225,7 +225,7 @@ the ES path policy must allow them.
   a vnode with host executables (they come through mosbind). Until then,
   cache nothing.
 - **D-16 Languages.** Extension in Swift (SwiftPM + Command Line Tools, the
-  build already proven in amosproxy). mosjaild and `mosjail` in Python,
+  build already proven in amosproxy). amosjaild and `amosjail` in Python,
   stdlib only (`tomllib`), reusing amosproxy's `session.py`, `darwin.py`
   peer-token code and wire framing. Revisit if the CLI's pre-exec sequence
   is cleaner in Swift (Q-8).
@@ -234,7 +234,7 @@ the ES path policy must allow them.
 
 ```toml
 [daemon]
-jail_dir = "/var/mosjail"
+jail_dir = "/var/amosjail"
 uids = { first = 600, count = 100 }
 on_extension_loss = "kill"
 amosproxy_socket = "/var/run/amosproxy.sock"
@@ -260,13 +260,13 @@ Roles are immutable for a live jail. A config reload affects new jails only
 
 ### Wire protocol
 
-Line-delimited JSON on `/var/run/mosjaild.sock`, like amosproxy's control
+Line-delimited JSON on `/var/run/amosjaild.sock`, like amosproxy's control
 socket. The extension channel uses 4-byte big-endian length + JSON (amosproxy
 D-5).
 
 ```
 {"op":"enroll","role":"agent"}
-  → {"ok":true,"jail":"j7","root":"/var/mosjail/j7/root","uid":607,"gid":607}
+  → {"ok":true,"jail":"j7","root":"/var/amosjail/j7/root","uid":607,"gid":607}
 {"op":"status"}                → {"ok":true,"jails":[…]}
 {"op":"kill","jail":"j7"}      → root only
 ```
@@ -274,7 +274,7 @@ D-5).
 ## 6. Layout
 
 ```
-src/mosjail/
+src/amosjail/
   cli.py          run / status / kill / daemon; stdlib only
   enter.py        child pre-exec sequence (§4 steps 1–7)
   pty.py          supervisor pty relay (D-11)
@@ -313,7 +313,7 @@ the policy can be checked with zero risk to the machine.
 - **T-03** *(mosbind)* Admit an extra uid per mount (e.g. `-o admit=607`), so
   the jail uid isn't refused by `refuse()`.
 - **T-04** Control socket: `enroll` with D-3 checks, `status`, `kill`.
-- **T-05** `mosjail run`: supervisor + child sequence, closefrom, env, pty.
+- **T-05** `amosjail run`: supervisor + child sequence, closefrom, env, pty.
 - **T-06** Extension: ES client, membership tracking (D-9), jail table and
   persistence, channel with ack. Subscribes to every event in D-5/D-7 and
   §2, logs `allow|deny <event> <jail> <path>` and always responds allow.
@@ -352,7 +352,7 @@ the amosproxy provider stopped.
 
 ### M4 — packaging
 
-`mosjail install`: hidden `_mosjailNNN` accounts (Q-3), launchd plist,
+`amosjail install`: hidden `_amosjailNNN` accounts (Q-3), launchd plist,
 container app, then guiding the two approvals (system extension and Full
 Disk Access for the ES client, without which `es_new_client` returns
 `ERR_NOT_PERMITTED`). `docs/SETUP.md` covers SIP, developer mode and the
@@ -369,7 +369,7 @@ AMFI boot-arg.
   low-bandwidth exfiltration channel if allowed (Q-5).
 - **Already-open fds** aren't seen by ES. Covered for the jail's own start
   (closefrom), not for fds a reachable outside service chooses to send.
-- **Extension death window.** Between the extension dying and mosjaild
+- **Extension death window.** Between the extension dying and amosjaild
   killing the jails (D-14), jailed processes are unrestricted.
 - **Shared rw binds** between jails are a channel between them, by
   configuration.
@@ -408,14 +408,14 @@ AMFI boot-arg.
 ## 10. Open questions
 
 - **Q-1** Who mounts the binds, and as whom? mosbind's extension runs as the
-  mounting user, inside the App Sandbox. Does a root mount by mosjaild work,
+  mounting user, inside the App Sandbox. Does a root mount by amosjaild work,
   and can it reach arbitrary sources?
 - **Q-2** Should enrollment without root and without a chroot be supported
   (ES policy only, for a caller already alone in its asid)? D-3 allows it;
-  M1 only builds `mosjail run`.
+  M1 only builds `amosjail run`.
 - **Q-3** Jail uids: hidden directory-services accounts (so `getpwuid`, git
   and ssh work), or bare uids with `HOME`/`USER` set?
-- **Q-4** One daemon or two? mosjaild and amosproxyd share the tag and the
+- **Q-4** One daemon or two? amosjaild and amosproxyd share the tag and the
   framing. Merging them removes a round-trip and a failure mode (D-14's
   proxy check) but couples releases.
 - **Q-5** DNS: allow `mDNSResponder` and accept the gap, or route jail DNS
@@ -426,7 +426,7 @@ AMFI boot-arg.
 - **Q-7** What happens when a role is denied something at runtime: EPERM
   only, or also a structured event other tools can consume (for later
   human-in-the-loop approval, like amosproxy M5)?
-- **Q-8** Language for `mosjail run`'s pre-exec sequence: Python (reuses
+- **Q-8** Language for `amosjail run`'s pre-exec sequence: Python (reuses
   amosproxy) or Swift (shares types with the extension)?
 
 ## 11. Risk register

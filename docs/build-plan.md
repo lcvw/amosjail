@@ -8,7 +8,7 @@ refer to it. Anything here that changes a decision is marked **Δ**.
 
 This build delivers:
 
-- **M1, a working jail:** `mosjail run --role R -- CMD` gives a mosbind chroot
+- **M1, a working jail:** `amosjail run --role R -- CMD` gives a mosbind chroot
   under a compiled deny-default profile, running as the caller's uid with a
   real terminal and exit status.
 - **M2, proxy integration:** `network = "proxy"` tags the jail's audit
@@ -38,7 +38,7 @@ the OSC-filtering relay, and the mosbind fix for binding one source twice
   1. The client opens a pty itself (unprivileged), puts its own terminal
      in raw mode and relays bytes locally.
   2. It sends the slave end to the daemon over `SCM_RIGHTS`.
-  3. `mosjail-enter` runs `setsid` + `TIOCSCTTY` on the slave.
+  3. `amosjail-enter` runs `setsid` + `TIOCSCTTY` on the slave.
 
   Job control, `/dev/tty` and Ctrl-C then all work inside the jail. Resizes
   are a `TIOCSWINSZ` on the master. The profile allows only that one slave
@@ -55,7 +55,7 @@ the OSC-filtering relay, and the mosbind fix for binding one source twice
   error naming both binds.
 - **Δ4. Reuse amosproxy by copying its small Darwin helpers.** Copy
   `session.py` (asid), `darwin.py` (peer token, `scan_sessions`) and
-  `protocol.py` (framing) into `src/mosjail/_vendor/`, with their origin
+  `protocol.py` (framing) into `src/amosjail/_vendor/`, with their origin
   commit noted. Depending on the amosproxy package would pull in its
   project, and D-14 is stdlib only. If we later merge the two daemons
   (Q-5), the copies go away.
@@ -71,9 +71,9 @@ Unit tests run on Linux; everything else is gated on the Mac.
 1. **Skeleton.**
    - `git init`.
    - `pyproject.toml` (uv, Python ≥ 3.12, stdlib only, pytest in dev).
-   - The `src/mosjail/` layout from PLAN §6.
-   - `scripts/sync.sh`, which rsyncs the tree to `~/mosjail` on the Mac and
-     builds `mosjail-enter` there.
+   - The `src/amosjail/` layout from PLAN §6.
+   - `scripts/sync.sh`, which rsyncs the tree to `~/amosjail` on the Mac and
+     builds `amosjail-enter` there.
 2. **`config.py` (T-01).**
    - Loads the config with `tomllib` and validates every field, with errors
      that name the table and key.
@@ -82,7 +82,7 @@ Unit tests run on Linux; everything else is gated on the Mac.
      **peer** uid, never the client's environment) and `--param` values,
      only for keys the role's `cli.params` allows.
    - Applies `required` fragments and `allowed_users`.
-   - `mosjail check` validates the file.
+   - `amosjail check` validates the file.
 3. **`compile.py` (T-01).** A resolved role becomes SBPL in a fixed order:
    1. header, `(deny default)`, `JAIL` and `TTY` parameters;
    2. read-metadata on every ancestor of every target;
@@ -96,9 +96,9 @@ Unit tests run on Linux; everything else is gated on the Mac.
 
    Paths are normalised to the `/private` form at compile time (D-8).
    Golden-file tests cover every rule kind, and one golden file is `spikes/jail.sb`'s
-   semantics rebuilt from TOML. `mosjail profile` prints the compiled
+   semantics rebuilt from TOML. `amosjail profile` prints the compiled
    profile.
-4. **`enter/mosjail-enter.c` (T-02).** Grows from `spikes/enter.c`.
+4. **`enter/amosjail-enter.c` (T-02).** Grows from `spikes/enter.c`.
    - **Inputs:** argv `--root --uid --gid --cwd [--tty] [--rlimit k=v] --
      CMD…`. The profile arrives on fd 3. fd 4 is a close-on-exec status
      pipe.
@@ -122,7 +122,7 @@ Unit tests run on Linux; everything else is gated on the Mac.
      `LOCAL_PEERTOKEN`.
    - `spawn` does this:
      1. re-read the config and resolve the role;
-     2. create `/var/mosjail/<uid>/<id>/root` (root-owned `0755`) with
+     2. create `/var/amosjail/<uid>/<id>/root` (root-owned `0755`) with
         mountpoints `chown`ed to the caller;
      3. choose a source spelling not currently mounted (from `getmntinfo`
         sources, then `/usr/.`, `/usr/./.`, and so on);
@@ -132,10 +132,10 @@ Unit tests run on Linux; everything else is gated on the Mac.
         realpath, `ro` flag);
      2. refuse any source that is itself on mosbind;
      3. mount devfs and hard-link the mDNSResponder socket;
-     4. spawn `mosjail-enter` with the passed fds and read the asid;
+     4. spawn `amosjail-enter` with the passed fds and read the asid;
      5. relay exit and signals.
    - Teardown follows D-12, with Δ2.
-   - State lives in `/var/db/mosjail/<id>.json`, and the reaper reads it at
+   - State lives in `/var/db/amosjail/<id>.json`, and the reaper reads it at
      startup.
    - A watcher tears down any jail whose mosbind mounts disappear (the
      SIGBUS case).
@@ -162,7 +162,7 @@ Unit tests run on Linux; everything else is gated on the Mac.
      - no mount and no process is left in the asid after teardown;
      - teardown also works when the client is `kill -9`ed.
 10. **M2 (T-20, T-21).**
-    - Before `chroot`, `mosjail-enter` sends one JSON `tag` line to
+    - Before `chroot`, `amosjail-enter` sends one JSON `tag` line to
       `/var/run/amosproxy.sock`. It is root in its own fresh asid at that
       point, which is what amosproxy's `tag` op tags.
     - It requires the reply's asid to match its own, and refuses to exec
@@ -178,12 +178,12 @@ Unit tests run on Linux; everything else is gated on the Mac.
 - The Mac has no `uv` on its PATH, but it has uv's CPython 3.15 (used by
   `~/amosproxy/.venv`).
 - During development the daemon runs as
-  `sudo <that python> -m mosjail daemon` from the synced tree.
+  `sudo <that python> -m amosjail daemon` from the synced tree.
 - **This is dev only.** Running root code from a user-writable directory
   means any jail with that directory bound rw could replace the daemon's
   code. The daemon refuses to start from a path that's inside any role's rw
   bind, and M4 installs to a root-owned prefix.
-- **Shared-machine rules for tests:** jail roots live under `/var/mosjail`
+- **Shared-machine rules for tests:** jail roots live under `/var/amosjail`
   only, no broad `pkill`, mounts are checked before each run, and a mosbind
   path is never used as a source (enforced in code by step 5).
 
