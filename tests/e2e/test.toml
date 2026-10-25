@@ -1,0 +1,42 @@
+# Config for the e2e gates on the test Mac. Installed root-owned by
+# tests/e2e/lib.sh, so its [daemon] settings are honoured.
+[daemon]
+socket = "/var/run/amosjaild-test.sock"
+jail_dir = "/var/amosjail-test"
+state_dir = "/var/db/amosjail-test/state"
+enter = "/var/db/amosjail-test/amosjail-enter"
+
+[fragments.base]
+binds = [
+  { source = "/usr",         target = "/usr" },
+  { source = "/bin",         target = "/bin" },
+  { source = "/sbin",        target = "/sbin" },
+  { source = "/System",      target = "/System" },
+  { source = "/Library",     target = "/Library" },
+  { source = "/private/etc", target = "/private/etc" },
+]
+scratch = ["/private/tmp", "/home"]
+links = { "/etc" = "private/etc", "/tmp" = "private/tmp", "/var" = "private/var" }
+exec = ["/usr/bin/**", "/bin/**", "/sbin/**", "/usr/sbin/**", "/usr/libexec/**"]
+devices = ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"]
+sysctl_read = true
+mach = ["com.apple.system.logger", "com.apple.system.opendirectoryd.libinfo"]
+env = { set = { HOME = "/home", TMPDIR = "/private/tmp", PATH = "/usr/bin:/bin:/usr/sbin:/sbin" }, pass = ["TERM"] }
+
+[fragments.project]
+binds = [{ source = "${PROJECT}", target = "/work", mode = "rw" }]
+exec = ["/work/**"]
+cwd = "/work"
+
+[roles.test]
+fragments = ["base", "project"]
+network = "open"
+dns = true
+params = { PROJECT = "${CWD}" }
+cli = { binds = "ro", params = ["PROJECT"] }
+
+[roles.offline]
+fragments = ["base", "project"]
+network = "none"
+params = { PROJECT = "${CWD}" }
+cli = { params = ["PROJECT"] }

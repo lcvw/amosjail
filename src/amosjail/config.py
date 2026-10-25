@@ -443,6 +443,37 @@ def parse(text: str, path: str = "<string>") -> Config:
                   fragments=fragments, roles=roles)
 
 
+def trusted(path: str) -> bool:
+    """Whether only root can change the file: it and its directory are
+    root-owned and not writable by group or others."""
+    try:
+        for p in (path, os.path.dirname(os.path.realpath(path))):
+            st = os.stat(p)
+            if st.st_uid != 0 or st.st_mode & 0o022:
+                return False
+    except OSError:
+        return False
+    return True
+
+
+def privileged(cfg: Config) -> Config:
+    """The config the root daemon may act on (D-15). `[daemon]` and
+    `[amosproxy]` name programs root runs, paths root writes and
+    destinations amosproxy stops inspecting (its exemptions are root-only
+    too), so a file anyone but root can edit doesn't get to change them:
+    they fall back to the defaults. Roles and fragments only ever narrow
+    what the caller's own uid can do, so they apply either way."""
+    if trusted(cfg.path):
+        return cfg
+    if cfg.daemon != DaemonSettings() or cfg.amosproxy != AmosproxySettings():
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "%s is writable by non-root users: ignoring its [daemon] and [amosproxy] "
+            "settings and using the defaults", cfg.path)
+    return replace(cfg, daemon=DaemonSettings(), amosproxy=AmosproxySettings())
+
+
 def load(path: str | None = None) -> Config:
     path = path or config_path()
     try:

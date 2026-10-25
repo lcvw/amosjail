@@ -3,3 +3,8 @@ __pycache__/
 .venv/
 /build/
 .pytest_cache/
+/enter/amosjail-enter
+/tests/escape/probe
+/tests/escape/net
+/tests/escape/sti
+/tests/escape/sleeper-gta

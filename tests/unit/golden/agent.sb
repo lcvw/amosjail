@@ -19,7 +19,8 @@
 ; exec
 (allow process-exec* (subpath "/private/var/amosjail/501/j1/root/usr/bin") (subpath "/private/var/amosjail/501/j1/root/bin") (subpath "/private/var/amosjail/501/j1/root/sbin") (subpath "/private/var/amosjail/501/j1/root/usr/sbin") (subpath "/private/var/amosjail/501/j1/root/usr/libexec") (subpath "/private/var/amosjail/501/j1/root/opt/homebrew"))
 
-; devices
+; devices: /dev/fd only reopens the process's own fds
+(allow file-read* file-write-data (subpath "/private/var/amosjail/501/j1/root/dev/fd") (literal "/private/var/amosjail/501/j1/root/dev/stdin") (literal "/private/var/amosjail/501/j1/root/dev/stdout") (literal "/private/var/amosjail/501/j1/root/dev/stderr"))
 (allow file-read* file-write-data (literal "/private/var/amosjail/501/j1/root/dev/null") (literal "/private/var/amosjail/501/j1/root/dev/zero") (literal "/private/var/amosjail/501/j1/root/dev/random") (literal "/private/var/amosjail/501/j1/root/dev/urandom"))
 (allow file-read* file-write-data file-ioctl (literal "/dev/ttys005") (literal "/private/var/amosjail/501/j1/root/dev/ttys005") (literal "/private/var/amosjail/501/j1/root/dev/tty"))
 

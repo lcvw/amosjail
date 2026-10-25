@@ -175,7 +175,9 @@ def render(spec: Spec, root: str, tty: str | None = None, report: bool = False) 
         out.append("\n; exec")
         out.append("(allow process-exec* " + " ".join(pr.pattern(e) for e in spec.exec) + ")")
 
-    out.append("\n; devices")
+    out.append("\n; devices: /dev/fd only reopens the process's own fds")
+    out.append(f"(allow file-read* file-write-data {pr.sub('/dev/fd')} "
+               + " ".join(pr.lit(f"/dev/std{x}") for x in ("in", "out", "err")) + ")")
     if spec.devices:
         out.append("(allow file-read* file-write-data " + " ".join(pr.lit(d) for d in spec.devices) + ")")
     if tty:
