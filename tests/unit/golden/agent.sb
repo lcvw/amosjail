@@ -1,0 +1,52 @@
+(version 1)
+(deny default)
+(allow process-fork)
+
+; jail root, directories on the way to every bind, and links
+(allow file-read* (literal "/private/var/amosjail/501/j1/root") (literal "/private/var/amosjail/501/j1/root/dev") (literal "/private/var/amosjail/501/j1/root/etc") (literal "/private/var/amosjail/501/j1/root/opt") (literal "/private/var/amosjail/501/j1/root/private") (literal "/private/var/amosjail/501/j1/root/private/var") (literal "/private/var/amosjail/501/j1/root/private/var/run") (literal "/private/var/amosjail/501/j1/root/tmp") (literal "/private/var/amosjail/501/j1/root/var"))
+
+; binds
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/usr"))  ; mosbind /usr
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/bin"))  ; mosbind /bin
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/sbin"))  ; mosbind /sbin
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/System"))  ; mosbind /System
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/Library"))  ; mosbind /Library
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/private/etc"))  ; mosbind /private/etc
+(allow file-read* (subpath "/private/var/amosjail/501/j1/root/opt/homebrew"))  ; mosbind /opt/homebrew
+(allow file-read* file-write* (subpath "/private/var/amosjail/501/j1/root/work"))  ; mosbind /Users/liam/proj
+(allow file-read* file-write* (subpath "/private/var/amosjail/501/j1/root/private/tmp") (subpath "/private/var/amosjail/501/j1/root/private/var/tmp") (subpath "/private/var/amosjail/501/j1/root/home"))
+
+; exec
+(allow process-exec* (subpath "/private/var/amosjail/501/j1/root/usr/bin") (subpath "/private/var/amosjail/501/j1/root/bin") (subpath "/private/var/amosjail/501/j1/root/sbin") (subpath "/private/var/amosjail/501/j1/root/usr/sbin") (subpath "/private/var/amosjail/501/j1/root/usr/libexec") (subpath "/private/var/amosjail/501/j1/root/opt/homebrew"))
+
+; devices
+(allow file-read* file-write-data (literal "/private/var/amosjail/501/j1/root/dev/null") (literal "/private/var/amosjail/501/j1/root/dev/zero") (literal "/private/var/amosjail/501/j1/root/dev/random") (literal "/private/var/amosjail/501/j1/root/dev/urandom"))
+(allow file-read* file-write-data file-ioctl (literal "/dev/ttys005") (literal "/private/var/amosjail/501/j1/root/dev/ttys005") (literal "/private/var/amosjail/501/j1/root/dev/tty"))
+
+(allow sysctl-read)
+
+; mach services
+(allow mach-lookup (global-name "com.apple.system.logger") (global-name "com.apple.system.notification_center") (global-name "com.apple.system.opendirectoryd.libinfo"))
+
+; network = proxy: outbound TCP, never UDP
+(allow network-outbound (remote tcp "*:*"))
+
+; denies (D-9, D-10)
+(deny file-write* (literal "/private/var/amosjail/501/j1/root/work/.direnv") (literal "/private/var/amosjail/501/j1/root/work/.git") (literal "/private/var/amosjail/501/j1/root/work/.git/hooks") (literal "/private/var/amosjail/501/j1/root/work/.idea") (literal "/private/var/amosjail/501/j1/root/work/.vscode"))
+(deny file-write* (subpath "/private/var/amosjail/501/j1/root/work/.git/hooks") (subpath "/private/var/amosjail/501/j1/root/work/.git/config") (subpath "/private/var/amosjail/501/j1/root/work/.envrc") (subpath "/private/var/amosjail/501/j1/root/work/.direnv") (subpath "/private/var/amosjail/501/j1/root/work/.vscode") (subpath "/private/var/amosjail/501/j1/root/work/.idea") (regex #"^/private/var/amosjail/501/j1/root/work/(.*/)?\.husky/.*$"))
+(deny file-read* file-write* process-exec* (subpath "/private/var/amosjail/501/j1/root/work/.env"))
+(deny network-outbound (remote ip "localhost:*"))
+
+; exceptions
+(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder") (path-literal "/private/var/amosjail/501/j1/root/private/var/run/mDNSResponder")))
+(allow file-read* (literal "/private/var/amosjail/501/j1/root/private/var/run/mDNSResponder"))
+
+; mandatory: process isolation and TIOCSTI (D-6, D-7)
+(deny process-info*)
+(deny sysctl-read (sysctl-name-prefix "kern.proc"))
+(deny signal)
+(deny mach-priv-task-port)
+(deny mach-task-name)
+(allow process-info* (target same-sandbox))
+(allow signal (target same-sandbox))
+(deny file-ioctl (ioctl-command #x80017472))

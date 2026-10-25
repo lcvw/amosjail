@@ -1,0 +1,13 @@
+[project]
+name = "amosjail"
+version = "0.1.0"
+description = "Seatbelt + mosbind chroot jails for agent process trees on macOS"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+amosjail = "amosjail.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

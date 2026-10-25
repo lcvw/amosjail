@@ -1,0 +1,75 @@
+# /etc/amosjail/amosjail.toml: amosjail, plus the amosproxy and mosbind
+# settings it drives. Re-read on every `amosjail run`. See PLAN.md §5.
+
+[daemon]
+socket = "/var/run/amosjaild.sock"
+jail_dir = "/var/amosjail"          # must be root-owned; jails live in <jail_dir>/<uid>/<id>
+state_dir = "/var/db/amosjail"
+enter = "/usr/local/libexec/amosjail-enter"
+
+# amosproxy: `sudo amosjail amosproxy` starts its daemon with these flags, and
+# amosjaild keeps `exempt` applied. Roles with network = "proxy" are tagged
+# with it before exec, and refuse to start without it.
+[amosproxy]
+command = ["/usr/local/bin/amosproxy"]
+socket = "/var/run/amosproxy.sock"
+ext_socket = "/var/run/amosproxy-ext.sock"
+socks_port = 0
+confdir = "/var/db/amosproxy"
+flowlog = "/var/log/amosproxy/flows.jsonl"
+public_dir = "/Library/Application Support/amosproxy"
+gc_interval = 30.0
+exempt = []                          # IP prefixes or DNS names relayed raw
+
+# mosbind: the tools the client mounts with. Binds are `type = "bind"`
+# (mosbind) or `type = "overlay"` (mosoverlay: lower = [...], workdir).
+# A bind's `notify = { match, command }` runs mosbind-notify on it.
+[mosbind]
+mount = "/sbin/mount"
+umount = "/sbin/umount"
+notify = "/usr/local/bin/mosbind-notify"
+
+# Fragments are reusable building blocks. ${HOME}, ${USER}, ${UID}, ${CWD}
+# and role params are substituted. Paths are jail paths unless named source.
+
+[fragments.base]
+binds = [
+  { source = "/usr",         target = "/usr" },
+  { source = "/bin",         target = "/bin" },
+  { source = "/sbin",        target = "/sbin" },
+  { source = "/System",      target = "/System" },
+  { source = "/Library",     target = "/Library" },
+  { source = "/private/etc", target = "/private/etc" },
+]
+scratch = ["/private/tmp", "/private/var/tmp", "/home"]
+links = { "/etc" = "private/etc", "/tmp" = "private/tmp", "/var" = "private/var" }
+exec = ["/usr/bin/**", "/bin/**", "/sbin/**", "/usr/sbin/**", "/usr/libexec/**"]
+devices = ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom"]
+sysctl_read = true
+mach = ["com.apple.system.logger", "com.apple.system.notification_center",
+        "com.apple.system.opendirectoryd.libinfo"]
+env = { set = { HOME = "/home", TMPDIR = "/private/tmp", PATH = "/usr/bin:/bin:/usr/sbin:/sbin" }, pass = ["TERM", "LANG", "COLORTERM"] }
+
+[fragments.homebrew]
+binds = [{ source = "/opt/homebrew", target = "/opt/homebrew" }]
+exec = ["/opt/homebrew/**"]
+env = { set = { PATH = "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" } }
+
+[fragments.project]
+binds = [{ source = "${PROJECT}", target = "/work", mode = "rw", deny = [".env"] }]
+cwd = "/work"
+
+[roles.shell]
+fragments = ["base", "project"]
+network = "none"
+params = { PROJECT = "${CWD}" }
+cli = { binds = "ro", params = ["PROJECT"] }
+
+[roles.agent]
+fragments = ["base", "homebrew", "project"]
+network = "proxy"
+proxy = { label = "agent" }
+dns = true
+params = { PROJECT = "${CWD}" }
+cli = { binds = "ro", params = ["PROJECT"] }
+rlimits = { nproc = 1024 }
