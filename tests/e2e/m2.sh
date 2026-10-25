@@ -15,6 +15,13 @@ cd "$P" || exit 1
 MYIP=$(ipconfig getifaddr en0 2>/dev/null || echo 100.78.179.107)
 ap() { /usr/local/amosproxy/venv/bin/amosproxy "$@"; }
 
+if ap status 2>&1 | grep -q "extension not connected"; then
+  echo "== amosproxy's network extension isn't connected: traffic checks SKIPPED"
+  out=$(aj run --role proxied -- /bin/echo ran 2>&1)
+  check "refuses when the tag isn't confirmed" yes "$(echo "$out" | grep -q 'did not confirm the tag' && echo yes || echo no)"
+  check "command didn't run" no "$(echo "$out" | grep -qx ran && echo yes || echo no)"
+  skipped=1
+else
 echo "== tagging"
 aj_bg run --role proxied -- /bin/sh -c 'sleep 4'; C=$!
 sleep 2
@@ -42,6 +49,8 @@ if [ -n "$socks" ]; then
   check "mitmproxy's loopback port unreachable" fail "$(aj run --role proxied -- /bin/sh -c "/usr/bin/nc -z -G 2 127.0.0.1 $socks 2>/dev/null && echo reached || echo fail")"
 fi
 
+fi
+
 echo "== fail closed"
 sudo sh -c "sed 's|^\[daemon\]|[amosproxy]@socket = \"/var/run/amosproxy-missing.sock\"@@[daemon]|' $SRC/tests/e2e/test.toml | tr @ '\n' > $T/amosjail.toml"
 daemon_up_keep_conf() { daemon_down; sudo sh -c "PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=$SRC/src AMOSJAIL_CONFIG=$CONF nohup '$PY' -m amosjail daemon > $LOG 2>&1 &"; sleep 1.5; }
@@ -53,5 +62,7 @@ check "offline roles still run" ran "$(aj run --role offline -- /bin/echo ran)"
 
 daemon_down
 echo
-[ $fails -eq 0 ] && echo "M2: all checks passed" || echo "M2: $fails check(s) failed"
+if [ $fails -ne 0 ]; then echo "M2: $fails check(s) failed"
+elif [ -n "$skipped" ]; then echo "M2: passed, but traffic checks were skipped (extension down)"; fails=1
+else echo "M2: all checks passed"; fi
 exit $fails

@@ -1,8 +1,10 @@
 # amosjail — Implementation Plan
 
-**Status:** design; core spikes done on macOS 27.0.1 (`docs/spike-results.md`).
-A hand-built jail (mosbind chroot + deny-default profile, applied by
-`spikes/enter.c`) passes the process, file, network and tty checks end to end.
+**Status:** M1 built and passing on macOS 27.0.1 (`tests/e2e/m1.sh`, 57
+checks; `tests/compat`, 13 workloads). M2 is built; its fail-closed checks
+pass, and its traffic checks wait on amosproxy's extension (`tests/e2e/m2.sh`).
+Spike results are in `docs/spike-results.md`, the build plan in
+`docs/build-plan.md`.
 **Last updated:** 2026-10-25
 
 Decisions are `D-nn`, tasks `T-nn`, spikes `S-nn`, open questions `Q-nn`; all
@@ -203,14 +205,20 @@ role, and the caller runs steps 3–8 itself.
   The compiled profile is self-contained. It doesn't import
   `/System/Library/Sandbox/Profiles/*.sb`: Apple's profiles change across
   releases, and an import would silently widen a role.
-- **D-6 The jail gets the user's stdio and nothing else.** No other
-  inherited fds (E10). The client passes its stdin, stdout and stderr over
-  `SCM_RIGHTS`, so the jail uses the real terminal and job control works as
-  usual. E11 is closed in the profile instead:
-  `(deny file-ioctl (ioctl-command #x80017472))` blocks `TIOCSTI`, and other
-  tty ioctls keep working (measured). A pty relay that also filters
-  terminal escape sequences (OSC 52 clipboard writes, title injection) is a
-  role option, `tty = "relay"`, for later.
+- **D-6 A pty from a terminal, the user's stdio otherwise; nothing else.**
+  No other inherited fds (E10). When stdin and stdout are terminals, the
+  client opens a pty, relays it in raw mode and passes the slave over
+  `SCM_RIGHTS`; `amosjail-enter` makes it the controlling terminal
+  (`setsid` + `TIOCSCTTY`). So `/dev/tty`, Ctrl-C, Ctrl-Z and job control
+  work inside the jail, and resizes are a `TIOCSWINSZ` on the master. The
+  user's own terminal can't be the jail's controlling terminal: the jail
+  isn't in the terminal's session, and taking it would detach the user's
+  shell. Otherwise (pipes, files) the client's fds 0–2 are passed as they
+  are, and the profile allows metadata reads of exactly the files they
+  point at (clang `fstat`s stderr and exits 1 silently without that).
+  `(deny file-ioctl (ioctl-command #x80017472))` blocks `TIOCSTI` either way
+  (measured). Ctrl-Z in pty mode stops the jailed process inside the jail;
+  without a shell in there, nothing can resume it.
 - **D-7 Default deny, then compose.** Every profile starts `(deny default)`.
   A role is an ordered list of fragments, and a fragment contributes
   structured rules (binds, exec, mach, network, sysctl, iokit, ipc) and
@@ -238,16 +246,20 @@ role, and the caller runs steps 3–8 itself.
   the default covers.
 - **D-8 Paths are written in jail terms and compiled to host paths.**
   Inside a chroot, Seatbelt matches the host spelling of the mount path
-  (measured, S-1), so `/work/x` compiles to `/private/var/amosjail/501/j7/root/work/x`.
-  The jail root is passed as a profile parameter (`(param "JAIL")`), so the
-  compiled text doesn't depend on the jail id. The compiler normalises
-  `/var` → `/private/var`, `/tmp` → `/private/tmp`, firmlinks, NFD and case,
-  once, at compile time. `amosjail profile --role R` prints the result for
-  review.
+  (measured, S-1), so `/work/x` compiles to
+  `/private/var/amosjail/501/j7/root/work/x`. The daemon renders the
+  profile per jail with its real root (regexes can't take a parameter);
+  `amosjail profile --role R` renders it with an example root for review.
+  `/var`, `/tmp` and `/etc` are normalised to `/private/...`.
 - **D-9 rw binds carry a default deny list** against E13: `.git/hooks/**`,
-  `.git/config`, `.envrc`, `.direnv/**`, `.vscode/**`, `.idea/**`,
-  `**/.husky/**`. Each bind can override it with `deny = [...]` (and opt out
-  with `deny_defaults = false`). This narrows E13 but can't close it (§8).
+  `.git/config`, `.envrc`, `.direnv/**`, `.vscode/**`, `.idea/**` and
+  `**/.husky/**` become read-only. Per bind, `deny_write = [...]` adds more,
+  `deny = [...]` removes all access (secrets such as `.env`), and
+  `deny_defaults = false` opts out. The directories between the bind and
+  each pattern (`.git` itself) are made unwritable too: otherwise
+  `mv .git x; write x/hooks/...; mv x .git` gets around the rule. The cost
+  is that `git init` in a fresh rw bind fails. This narrows E13 but can't
+  close it (§8).
 - **D-10 Network policy per role** (E7, E8):
   - `none` — no network at all;
   - `proxy` — outbound TCP to non-loopback only, an amosproxy tag is
@@ -272,20 +284,46 @@ role, and the caller runs steps 3–8 itself.
      token has the jail's asid, until none is left (enumerated as root via
      task name ports);
   2. untags the asid in amosproxy;
-  3. tells the client to unmount;
-  4. removes the jail root.
+  3. unmounts everything under the jail root itself (the client's mounts
+     too, so a killed client still gets cleaned up), **never forcibly**;
+  4. removes the jail root and its state file.
 
-  Detached jails (`--detach`) are kept until `amosjail kill`. A startup reaper
-  cleans up after a daemon crash from `/var/db/amosjail/`.
+  A chroot gets its own dyld shared region, backed by the jail's `/System`
+  mount, and the kernel keeps it about 120 s after the last process exits.
+  Until then `/System` is busy. Forcing the unmount (the first version did)
+  leaves the region with no pager, and a later jail's exec dies of SIGBUS
+  in dyld, about 1 run in 8 ("Object has no pager because the backing vnode
+  was force unmounted"). So a busy jail is left *draining* and retried
+  every 5 s. A monitor tears down any running jail whose mounts vanish (a
+  fskitd restart). A startup reaper handles jails left by a daemon crash,
+  from `state_dir`.
 - **D-13 One config file, in a fixed place: `/etc/amosjail/amosjail.toml`.**
-  It may be owned by root or by a user; amosjail doesn't check. It has no
-  layering and no per-user roles for now. `MOSJAIL_CONFIG` overrides the
-  path, for tests only. The daemon re-reads the file on every `spawn`, so
-  edits take effect for the next jail without a restart. Because the file
-  may be user-writable, the daemon treats it as input, not authority: it
-  only ever creates, mounts and removes inside `jail_dir`, and refuses a
-  `jail_dir` that isn't root-owned. A role can set `required = true` on a
-  fragment so that no `--bind` or `--param` can drop it.
+  It may be owned by root or by a user. It has no layering and no per-user
+  roles for now. `AMOSJAIL_CONFIG` (or `--config`) overrides the path, for
+  tests. The daemon re-reads roles and fragments on every `spawn`, so edits
+  take effect for the next jail without a restart. Every table and key is
+  checked; an unknown key is an error.
+- **D-15 The config covers amosproxy and mosbind too, and root-relevant
+  settings need a root-owned file.** Sections:
+  - `[daemon]` sets amosjaild's socket, `jail_dir`, `state_dir` and the
+    `amosjail-enter` path;
+  - `[amosproxy]` has the daemon's flags (`sudo amosjail amosproxy` starts
+    it with them), the socket jails are tagged through, the CA
+    `public_dir` that becomes `SSL_CERT_FILE` and friends, and `exempt`,
+    which amosjaild keeps applied (adding its rules and removing only those
+    it added before);
+  - `[mosbind]` names the mount, umount and `mosbind-notify` tools. Each
+    bind picks `type = "bind"` (mosbind) or `"overlay"` (mosoverlay, with
+    `lower` and `workdir`), and can carry `notify = { match, command }`,
+    which runs `mosbind-notify` on it for the jail's lifetime;
+  - `[fragments.*]` and `[roles.*]` are as in §5.
+
+  `[daemon]` and `[amosproxy]` name programs root runs, paths root writes
+  and destinations amosproxy stops inspecting. If the file or its
+  directory is writable by anyone but root, the daemon ignores both
+  sections and uses the defaults (logged; `amosjail check` says so). Roles
+  and fragments apply either way, since a jail only ever has the caller's
+  own uid. The daemon still acts only inside a root-owned `jail_dir`.
 - **D-14 Languages.** amosjaild and the client in Python, stdlib only
   (`tomllib`), reusing amosproxy's `session.py`, `darwin.py` and framing.
   `amosjail-enter` is small C, so the code between `chroot` and `execve` has
@@ -293,63 +331,47 @@ role, and the caller runs steps 3–8 itself.
 
 ## 5. Config
 
+The annotated example is `etc/amosjail.toml`; `tests/e2e/test.toml` is the
+one the gates run. In short:
+
 ```toml
-[daemon]
-jail_dir = "/var/amosjail"
-amosproxy_socket = "/var/run/amosproxy.sock"
+[daemon]      # amosjaild: socket, jail_dir, state_dir, enter
+[amosproxy]   # amosproxy's daemon flags, socket, public_dir, exempt
+[mosbind]     # mount, umount, notify tools
 
-# Fragments are reusable building blocks. ${HOME}, ${USER}, ${CWD}, ${PROJECT}
-# and any --param are substituted at compile time.
-
-[fragments.base]                       # what any CLI process needs
-required = true
-binds = [
-  { source = "/usr",    target = "/usr",    mode = "ro" },
-  { source = "/bin",    target = "/bin",    mode = "ro" },
-  { source = "/System", target = "/System", mode = "ro" },
-]
-host_paths = []                        # outside the jail, needed by the chroot workaround (S-9)
-mach = ["com.apple.system.logger", "com.apple.system.notification_center",
-        "com.apple.system.opendirectoryd.libinfo"]
+[fragments.base]        # what any CLI process needs
+binds = [{ source = "/usr", target = "/usr" }, ...]   # ro unless mode = "rw"
+scratch = ["/private/tmp", "/home"]   # empty, caller-owned, per jail
+links = { "/tmp" = "private/tmp" }
+exec = ["/usr/bin/**", ...]
+devices = ["/dev/null", ...]
+mach = ["com.apple.system.logger", ...]
 sysctl_read = true
-devices = ["/dev/null", "/dev/zero", "/dev/random", "/dev/urandom", "/dev/tty"]
-
-[fragments.homebrew]
-binds = [{ source = "/opt/homebrew", target = "/opt/homebrew", mode = "ro" }]
-exec = ["/opt/homebrew/bin/**", "/opt/homebrew/Cellar/**"]
+env = { set = { HOME = "/home" }, pass = ["TERM"] }
+sbpl = "..."                          # raw SBPL; sbpl_final goes after everything
 
 [fragments.project]
-binds = [{ source = "${PROJECT}", target = "/work", mode = "rw",
-           deny = [".git/hooks/**", ".env"] }]      # plus D-9 defaults
+binds = [{ source = "${PROJECT}", target = "/work", mode = "rw", deny = [".env"] }]
 cwd = "/work"
-env = { set = { HOME = "/home" } }
-
-[fragments.claude-code]
-binds = [{ source = "${HOME}/.claude", target = "/home/.claude", mode = "rw" }]
-mach = ["com.apple.trustd.agent"]
-env = { set = { CLAUDE_CODE_SANDBOX = "off" } }     # illustrative; D-2
-sbpl = """
-(allow file-read* (literal "/private/etc/ssl/cert.pem"))
-"""
 
 [roles.agent]
-fragments = ["base", "homebrew", "project", "claude-code"]
-network = "proxy"
-proxy_label = "agent"
+fragments = ["base", "devtools", "homebrew", "project"]
+network = "proxy"                     # none | proxy | open
+proxy = { label = "agent", ca_env = true }
 dns = true
-loopback = []
-unix_sockets = []
-proc_visibility = "jail"               # jail | all
-exec = ["/usr/bin/**", "/bin/**", "/work/.venv/bin/**"]
-allowed_users = ["liam"]
-cli = { binds = "ro", params = ["PROJECT"] }   # what `amosjail run` may add
-rlimits = { nproc = 1024, nofile = 8192 }
+loopback = []                         # e.g. "127.0.0.1:8080"
+unix_sockets = []                     # { host, target }: hard-linked in
+proc_visibility = "jail"              # jail | names
+params = { PROJECT = "${CWD}" }       # defaults; --param may override if listed
+cli = { binds = "ro", params = ["PROJECT"] }
+allowed_users = []                    # empty: anyone
+rlimits = { nproc = 1024 }
 ```
 
 ### CLI
 
 ```
-amosjail run --role R [--bind SRC:DST[:ro|rw]] [--param K=V] [--report] [--detach] -- CMD…
+aamosjail run --role R [--bind SRC:DST[:ro|rw]] [--param K=V] [--report] -- CMD…
 amosjail profile --role R [--param …]          print the compiled SBPL
 amosjail status | kill <jail>
 amosjail roles                                  list roles available to the caller
@@ -451,8 +473,15 @@ shipped fragments. No system extension, no entitlement, no approval prompts.
 - **DNS** through `mDNSResponder` is unattributed and is an exfiltration
   channel when `dns = true` (Q-3). The hard-linked socket also goes stale
   if mDNSResponder restarts, and the jail loses DNS until it's re-linked.
-- **No `ps` inside a jail yet.** It prints nothing even with listing
-  allowed; the cause is unknown.
+- **No `ps` inside a jail.** `/bin/ps` is setuid root, and its exec is
+  denied (EPERM) under the profile even though `/bin` is an exec path.
+- **Report mode can change behaviour.** It allows what enforcement would
+  deny, so a tool may take a different path: allowed, `dirhelper` hands
+  out a `/var/folders` temp dir the jail doesn't have, and clang fails
+  where it works when enforced. Read reports as hints.
+- **A finished jail keeps `/System` mounted for about 2 minutes** (D-12),
+  and FSKit's same-source rule means each draining jail uses up a spelling
+  of every source; the client tries 256.
 - **No lldb inside a jail.** `debug = true` grants task ports within the
   jail, but `ptrace(PT_ATTACHEXC)` stays denied and no rule to allow it has
   been found.
@@ -460,9 +489,8 @@ shipped fragments. No system extension, no entitlement, no approval prompts.
   `amfi_get_out_of_my_way=1`. Whether platform binaries still launch from a
   mosbind chroot with AMFI enforcing is unknown, and nfswrap's NFS
   experience suggests it may not.
-- **Jails must not outlive their volumes.** After fskitd restarted, execs in
-  a chroot died with SIGBUS for a few minutes (`docs/spike-results.md`). The
-  daemon should tear down any jail whose mosbind mounts disappear.
+- **Jails must not outlive their volumes.** A fskitd restart drops every
+  FSKit mount; the monitor then stops the affected jails (D-12).
 - **No nesting** (D-2). Some tools have no way to turn their sandbox off;
   they can't run in a jail.
 - **Private API.** `sandbox_compile_string`/`sandbox_apply` and SBPL are
@@ -485,9 +513,9 @@ Results are in `docs/spike-results.md`; sources and profiles in `spikes/`.
   any profile; `pbcopy`/`mdfind` need the Mach allowlist; separate jails are
   separate sandboxes. Still open: the `osascript` baseline (it hung on an
   Automation prompt) and an `NSURLSession` background task.
-- **S-5** The minimal Mach, sysctl, iokit and ipc set for the
-  `tests/compat/` workloads, each entry justified. Becomes the `base`
-  fragment.
+- **S-5 (done)** The `base` fragment's Mach, ipc and device set, found with
+  report mode over `tests/compat`: notify(3), `logd`, `/dev/tty`, `/dev/fd`,
+  and the stdio metadata rule (D-6).
 - **S-6 (done)** `(with report)` works for single rules and for `default`;
   log lines carry comm and pid. Signal denials aren't logged.
 - **S-7 (done)** `TIOCSTI` is live on macOS 27 and blockable by ioctl
@@ -498,8 +526,9 @@ Results are in `docs/spike-results.md`; sources and profiles in `spikes/`.
   /Library /private/etc` was enough; the dyld cache is reached through the
   `/System` bind, so no host path outside the jail root is needed. **Still
   open: the same test with AMFI enforcing.**
-- **S-10** Why does `ps` print nothing in a jail, and what (if anything)
-  lets `PT_ATTACHEXC` work within the same sandbox?
+- **S-10 (half done)** `ps` fails because `/bin/ps` is setuid and its exec
+  is denied. Still open: what (if anything) lets `PT_ATTACHEXC` work within
+  the same sandbox.
 
 ## 10. Open questions
 

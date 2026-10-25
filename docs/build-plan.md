@@ -1,6 +1,10 @@
 # Build plan: the Seatbelt wrapper (M1 + M2)
 
-**Status:** draft for review, 2026-10-25. This file covers how we build it and
+**Status:** adopted, 2026-10-25, with Δ1–Δ5 as written. M1 and the thin
+report mode are built and pass their gates; M2 is built, and its traffic
+checks wait on amosproxy's extension. Two things changed while building:
+teardown never force-unmounts, because that caused a SIGBUS (PLAN D-12),
+and `[daemon]`/`[amosproxy]` settings need a root-owned config (PLAN D-15). This file covers how we build it and
 in what order. The design itself is in `PLAN.md`, and ids (D-, T-, S-, E-)
 refer to it. Anything here that changes a decision is marked **Δ**.
 
